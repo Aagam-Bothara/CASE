@@ -164,15 +164,19 @@ def fetch_fargate_rates(region: str) -> Dict[str, float]:
                         except Exception:
                             continue
 
-                        # Fargate vCPU hours
-                        if "fargate" in desc and "vcpu" in desc and unit == "hrs":
+                        # Fargate vCPU hours - More flexible matching
+                        if "fargate" in desc and ("vcpu" in desc or "cpu" in desc) and ("hrs" in unit or "hour" in unit):
                             if vcpu_hour_price is None or price < vcpu_hour_price:
                                 vcpu_hour_price = price
+                                logger.debug(f"Found Fargate vCPU price: ${price}/hr - {desc}")
 
-                        # Fargate GB hours (memory)
-                        if "fargate" in desc and "gb" in desc and unit == "hrs":
-                            if mem_gb_hour_price is None or price < mem_gb_hour_price:
-                                mem_gb_hour_price = price
+                        # Fargate GB hours (memory) - More flexible matching
+                        if "fargate" in desc and ("gb" in desc or "memory" in desc) and ("hrs" in unit or "hour" in unit):
+                            # Exclude vCPU descriptions that might also mention GB
+                            if "vcpu" not in desc and "cpu" not in desc:
+                                if mem_gb_hour_price is None or price < mem_gb_hour_price:
+                                    mem_gb_hour_price = price
+                                    logger.debug(f"Found Fargate memory price: ${price}/GB-hr - {desc}")
 
             next_token = resp.get("NextToken")
             if not next_token:

@@ -200,23 +200,42 @@ async def fetch_container_apps_rates(arm_region: str) -> Dict[str, float]:
     fb = AZURE_FALLBACK_RATES["container_apps"]
     region = _normalize_azure_region(arm_region)
 
-    # 1. vCPU
+    # 1. vCPU - More flexible search with multiple patterns
     cpu_items = await search_prices_azure(
         arm_region=region,
         where_item=lambda it: (
-            "Container Apps" in (it.get("productName") or "")
-            and "vCPU" in (it.get("meterName") or "")
+            (
+                "Container Apps" in (it.get("productName") or "")
+                or "Container App" in (it.get("productName") or "")
+                or "Azure Container Apps" in (it.get("productName") or "")
+            )
+            and (
+                "vCPU" in (it.get("meterName") or "")
+                or "CPU" in (it.get("meterName") or "")
+            )
         ),
     )
     vcpu_price_raw = next(
         (x["price"] for x in cpu_items if "second" in x["unit"]), None
     )
 
-    # 2. Memory (GiB-seconds)
+    # Log for debugging
+    if vcpu_price_raw is None and cpu_items:
+        logger.info(
+            "Found %d Container Apps CPU items but no per-second pricing. Sample: %s",
+            len(cpu_items),
+            cpu_items[0] if cpu_items else "N/A"
+        )
+
+    # 2. Memory (GiB-seconds) - More flexible search
     mem_items = await search_prices_azure(
         arm_region=region,
         where_item=lambda it: (
-            "Container Apps" in (it.get("productName") or "")
+            (
+                "Container Apps" in (it.get("productName") or "")
+                or "Container App" in (it.get("productName") or "")
+                or "Azure Container Apps" in (it.get("productName") or "")
+            )
             and "Memory" in (it.get("meterName") or "")
         ),
     )
@@ -228,6 +247,46 @@ async def fetch_container_apps_rates(arm_region: str) -> Dict[str, float]:
         ),
         None,
     )
+
+    # Log for debugging
+    if mem_price_raw is None and mem_items:
+        logger.info(
+            "Found %d Container Apps Memory items but no per-GiB-second pricing. Sample: %s",
+            len(mem_items),
+            mem_items[0] if mem_items else "N/A"
+        )
+
+    # If Container Apps pricing not found, try Azure Functions as a proxy (similar consumption model)
+    if vcpu_price_raw is None:
+        logger.info("Container Apps vCPU not found, trying Azure Functions as proxy")
+        func_cpu_items = await search_prices_azure(
+            arm_region=region,
+            where_item=lambda it: (
+                "Functions" in (it.get("productName") or "")
+                and "vCPU" in (it.get("meterName") or "")
+            ),
+        )
+        vcpu_price_raw = next(
+            (x["price"] for x in func_cpu_items if "second" in x["unit"]), None
+        )
+
+    if mem_price_raw is None:
+        logger.info("Container Apps Memory not found, trying Azure Functions as proxy")
+        func_mem_items = await search_prices_azure(
+            arm_region=region,
+            where_item=lambda it: (
+                "Functions" in (it.get("productName") or "")
+                and "Memory" in (it.get("meterName") or "")
+            ),
+        )
+        mem_price_raw = next(
+            (
+                x["price"]
+                for x in func_mem_items
+                if ("gib" in x["unit"] or "gb" in x["unit"]) and "second" in x["unit"]
+            ),
+            None,
+        )
 
     vcpu_price = _validate_price(vcpu_price_raw, fb["vcpu_second"], "container_apps_vcpu")
     mem_price = _validate_price(mem_price_raw, fb["memory_gib_second"], "container_apps_mem")
